@@ -1,0 +1,281 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+
+entity data_path is 
+	port(
+			Clk, mClk		: in std_logic;
+			
+			WEN, EN			: in std_logic;
+			
+			Clr_A, Ld_A		: in std_logic;
+			Clr_B, Ld_B		: in std_logic;
+			Clr_C, Ld_C		: in std_logic;
+			Clr_Z, Ld_Z		: in std_logic;
+			ClrPC, Ld_PC	: in std_logic;
+			ClrIR, Ld_IR	: in std_logic;
+			
+			Out_A				: out std_logic_vector(31 downto 0);
+			Out_B				: out std_logic_vector(31 downto 0);
+			Out_C				: out std_logic;
+			Out_Z				: out std_logic;
+			Out_PC			: out std_logic_vector(31 downto 0);
+			Out_IR			: out std_logic_vector(31 downto 0);
+			
+			Inc_PC			: in std_logic;
+			
+			Addr_out			: out std_logic_vector(31 downto 0);
+			Data_in			: in std_logic_vector(31 downto 0);
+			Data_bus,
+			Mem_out,
+			Mem_in			: out std_logic_vector(31 downto 0);
+			Mem_addr			: out unsigned(7 downto 0);
+			
+			Data_mux			: in std_logic_vector(1 downto 0);
+			Reg_mux			: in std_logic;
+			A_mux,
+			B_mux				: in std_logic;
+			Im_mux1			: in std_logic;
+			Im_mux2			: in std_logic_vector(1 downto 0);
+			
+			ALU_op			: in std_logic_vector(2 downto 0)
+		
+	);
+end entity;
+
+architecture impOfDpath of data_path is
+	component data_mem is 
+		port(
+			clk			: in std_logic;
+			addr			: in unsigned(7 downto 0);
+			data_in		: in std_logic_vector(31 downto 0);
+			wen 			: in std_logic;
+			en				: in std_logic;
+			data_out 	: out std_logic_vector(31 downto 0)
+		);
+	end component;
+	
+	component register32 is 
+		port(
+			d: in std_logic_vector(31 downto 0);
+			ld: in std_logic;
+			clr: in std_logic;
+			clk: in std_logic;
+			Q : out std_logic_vector(31 downto 0)
+		);
+	end component;
+	
+	component pc is 
+		port(
+			clr 			: in std_logic;
+			clk			: in std_logic;
+			ld				: in std_logic;
+			inc 			: in std_logic;
+			d				: in std_logic_vector(31 downto 0);
+			q				: out std_logic_vector(31 downto 0)
+		);
+	end component;
+	
+	component LZE is 
+		port(
+			LZE_in		: in std_logic_vector(31 downto 0);
+			LZE_out		: out std_logic_vector(31 downto 0)
+		);
+	end component;
+	
+	component UZE is 
+		port(
+			UZE_in 		: in std_logic_vector(31 downto 0);
+			UZE_out		: out std_logic_vector(31 downto 0)
+		);
+	end component;
+	
+	component RED is 
+		port(
+			RED_in 		: in std_logic_vector(31 downto 0);
+			RED_out 		: out unsigned(31 downto 0)
+		);
+	end component;
+	
+	component mux2to1 is 
+		port(
+			s				: in std_logic;
+			w0, w1		: in std_logic_vector(31 downto 0);
+			f				: out std_logic_vector(31 downto 0)
+		);
+	end component;
+	
+	component mux4to1 is 
+		port(
+			s				: in std_logic_vector(31 downto 0);
+			X1, X2, X3, X4: in std_logic_vector(31 downto 0);
+			f				: out std_logic_vector(31 downto 0)
+		);
+	end component;
+	
+	component ALU is 
+		port(
+			a 				: in std_logic_vector(31 downto 0);
+			b				: in std_logic_vector(31 downto 0);
+			op				: in std_logic_vector(2 downto 0);
+			result		: out std_logic_vector(31 downto 0);
+			cout			: out std_logic;
+			zero			: out std_logic
+		);
+	end component;
+	
+	signal IR_out				: std_logic_vector(31 downto 0);
+	signal data_bus_s			: std_logic_vector(31 downto 0);
+	signal LZE_out_PC			: std_logic_vector(31 downto 0);
+	signal LZE_out_A_mux		: std_logic_vector(31 downto 0);
+	signal LZE_out_B_mux		: std_logic_vector(31 downto 0);
+	signal RED_out_Data_Mem	: unsigned(7 downto 0);
+	signal A_mux_out			: std_logic_vector(31 downto 0);
+	signal B_mux_out			: std_logic_vector(31 downto 0);
+	signal reg_A_out			: std_logic_vector(31 downto 0);
+	signal reg_B_out			: std_logic_vector(31 downto 0);
+	signal reg_Mux_out		: std_logic_vector(31 downto 0);
+	signal data_mem_out		: std_logic_vector(31 downto 0);	
+	signal UZE_IM_Mux1Out	: std_logic_vector(31 downto 0);
+	signal IM_Mux1_out		: std_logic_vector(31 downto 0);
+	signal LZE_IM_MUX2_out	: std_logic_vector(31 downto 0);
+	signal IM_MUX2_out		: std_logic_vector(31 downto 0);
+	signal ALU_out				: std_logic_vector(31 downto 0);
+	signal zero_flag			: std_logic;
+	signal carry_flag			: std_logic;
+	signal temp					: std_logic_vector(30 downto 0) := (others => '0');
+	signal out_pc_sig			: std_logic_vector(31 downto 0);
+	
+begin
+	IR: register32 port map(
+		data_bus_s,
+		Ld_IR,
+		ClrIR,
+		Clk,
+		IR_out
+		);
+	
+	LZE_PC: LZE port map (
+		IR_out,
+		LZE_out_pc
+		);
+	
+	PC0	: PC port map (
+		CLRPC,
+		Clk,
+		Ld_PC,
+		INC_PC,
+		LZE_out_PC,
+		out_pc_sig
+		);
+	
+	LZE_A_mux: LZE port map(
+		IR_out,
+		LZE_out_A_mux
+		);
+	
+	A_mux0	: mux2to1 port map(
+		A_mux,
+		data_bus_s, LZE_out_A_mux,
+		A_Mux_out
+	);
+	
+	Reg_A: register32 port map(
+		A_Mux_out,
+		Ld_A,
+		Clr_A,
+		Clk,
+		reg_A_out
+	);
+	
+	LZE_B_Mux: LZE port map(
+		IR_out,
+		LZE_out_B_mux
+	);
+	
+	B_Mux0: mux2to1 port map(
+		B_Mux,
+		data_bus_s, LZE_out_B_mux, 
+		B_Mux_out
+	);
+	
+	RegB	:register32 port map(
+		B_Mux_out,
+		Ld_B,
+		Clr_B,
+		Clk,
+		reg_B_out
+	);
+	
+	Reg_Mux0: mux2to1 port map(
+		Reg_mux, 
+		reg_A_out, Reg_B_out,
+		Reg_Mux_out
+	);
+	
+	RED_DATA_MEM : RED port map(
+		IR_out, 
+		RED_out_Data_Mem
+	);
+	
+	Data_Mem0: 	data_mem port map(
+		mClk, 
+		RED_out_Data_Mem,
+		Reg_Mux_out,
+		Wen,
+		En,
+		data_mem_out
+	);
+	
+	UZE_IM_Mux1 : UZE port map(
+		IR_out,
+		UZE_IM_Mux1Out
+	);
+	
+	IM_mux1a: mux2to1 port map(
+		IM_mux1,
+		reg_A_out, UZE_IM_Mux1Out,
+		IM_mux1_out
+	);
+	
+	LZE_IM_MUX2: LZE port map(
+		IR_out,
+		LZE_IM_MUX2_out
+	);
+	
+	IM_Mux2a	: mux4to1 port map(
+		IM_mux2,
+		reg_B_out, LZE_IM_MUX2_out, (temp & '1'), (others => '0'),
+		IM_mux2_out
+	);
+	
+	ALU0: ALU port map (
+		IM_Mux1_out,
+		IM_MUX2_out,
+		ALU_op,
+		ALU_out,
+		zero_flag,
+		carry_flag
+	);
+	
+	DATA_Mux0	: mux4to1 port map(
+		DATA_mux,
+		data_in, data_mem_out, ALU_out, (others => '0'),
+		data_bus_s
+	);
+	
+	DATA_Bus <= data_bus_s;
+	Out_A 	<= reg_A_out;
+	Out_B		<= reg_B_out;
+	Out_IR	<= IR_out;
+	Addr_out <= out_pc_sig;
+	Out_PC 	<= out_pc_sig;
+	
+	mem_addr	<= RED_out_Data_Mem;
+	mem_in	<= reg_mux_out;
+	mem_out 	<= data_mem_out;
+	
+end impOfDpath;
+	
+	
